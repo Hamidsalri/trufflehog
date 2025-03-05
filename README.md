@@ -9,7 +9,7 @@
 <div align="center">
 
 [![CI Status](https://github.com/trufflesecurity/trufflehog/actions/workflows/release.yml/badge.svg)](https://github.com/trufflesecurity/trufflehog/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/trufflesecurity/trufflehog/v3)](https://goreportcard.com/report/github.com/trufflesecurity/trufflehog/v3)
+[![Go Report Card](https://goreportcard.com/badge/github.com/trufflesecurity/trufflehog/v3)](htab5c65b5e5cf6900b798470e719a9febd38aa016tps://goreportcard.com/report/github.com/trufflesecurity/trufflehog/v3)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-brightgreen)](/LICENSE)
 [![Total Detectors](https://img.shields.io/github/directory-file-count/trufflesecurity/truffleHog/pkg/detectors?label=Total%20Detectors&type=dir)](/pkg/detectors)
 
