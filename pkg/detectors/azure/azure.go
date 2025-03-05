@@ -3,7 +3,7 @@ package azure
 import (
 	"context"
 	"fmt"
-	"regexp"
+	regexp "github.com/wasilibs/go-re2"
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/azure/auth"
@@ -12,7 +12,9 @@ import (
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct {
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
@@ -57,6 +59,10 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					RawV2:        []byte(clientID[2] + clientSecret[2] + tenantID[2]),
 					Redacted:     clientID[2],
 				}
+				// Set the RotationGuideURL in the ExtraData
+				s.ExtraData = map[string]string{
+					"rotation_guide": "https://howtorotate.com/docs/tutorials/azure/",
+				}
 
 				if verify {
 					cred := auth.NewClientCredentialsConfig(clientID[2], clientSecret[2], tenantID[2])
@@ -67,15 +73,6 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					err = token.Refresh()
 					if err == nil {
 						s.Verified = true
-					}
-				}
-
-				if !s.Verified {
-					if detectors.IsKnownFalsePositive(s.Redacted, detectors.DefaultFalsePositives, true) {
-						continue
-					}
-					if detectors.IsKnownFalsePositive(string(s.Raw), detectors.DefaultFalsePositives, true) {
-						continue
 					}
 				}
 

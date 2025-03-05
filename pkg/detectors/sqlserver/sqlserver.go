@@ -3,9 +3,13 @@ package sqlserver
 import (
 	"context"
 	"database/sql"
-	"regexp"
+	"time"
 
-	"github.com/denisenkom/go-mssqldb/msdsn"
+	regexp "github.com/wasilibs/go-re2"
+
+	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/msdsn"
+
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/detectors"
@@ -31,7 +35,7 @@ func (s Scanner) Keywords() []string {
 func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (results []detectors.Result, err error) {
 	matches := pattern.FindAllStringSubmatch(string(data), -1)
 	for _, match := range matches {
-		paramsUnsafe, _, err := msdsn.Parse(match[1])
+		paramsUnsafe, err := msdsn.Parse(match[1])
 		if err != nil {
 			continue
 		}
@@ -40,7 +44,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			continue
 		}
 
-		detected := detectors.Result{
+		s1 := detectors.Result{
 			DetectorType: detectorspb.DetectorType_SQLServer,
 			Raw:          []byte(paramsUnsafe.Password),
 			RawV2:        []byte(paramsUnsafe.URL().String()),
@@ -48,24 +52,41 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 		}
 
 		if verify {
-			verified, err := ping(paramsUnsafe)
-			if err != nil {
+			isVerified, err := ping(paramsUnsafe)
+
+			s1.Verified = isVerified
+
+			if mssqlErr, isMssqlErr := err.(mssql.Error); isMssqlErr && mssqlErr.Number == 18456 {
+				// Login failed
+				// Number taken from https://learn.microsoft.com/en-us/sql/relational-databases/errors-events/database-engine-events-and-errors?view=sql-server-ver16
+				// Nothing to do; determinate failure to verify
 			} else {
-				detected.Verified = verified
+				s1.SetVerificationError(err, paramsUnsafe.Password)
 			}
 		}
 
-		results = append(results, detected)
+		results = append(results, s1)
 	}
 
 	return results, nil
 }
 
 var ping = func(config msdsn.Config) (bool, error) {
-	url := config.URL()
+	cleanConfig := msdsn.Config{}
+	cleanConfig.Host = config.Host
+	cleanConfig.Port = config.Port
+	cleanConfig.User = config.User
+	cleanConfig.Password = config.Password
+	cleanConfig.Database = config.Database
+	cleanConfig.DisableRetry = true
+	cleanConfig.Encryption = config.Encryption
+	cleanConfig.TLSConfig = config.TLSConfig
+	cleanConfig.Instance = config.Instance
+	cleanConfig.DialTimeout = time.Second * 3
+	cleanConfig.ConnTimeout = time.Second * 3
+
+	url := cleanConfig.URL()
 	query := url.Query()
-	query.Set("dial timeout", "3")
-	query.Set("connection timeout", "3")
 	url.RawQuery = query.Encode()
 
 	conn, err := sql.Open("mssql", url.String())

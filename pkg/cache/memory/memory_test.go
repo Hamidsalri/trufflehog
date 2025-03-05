@@ -7,12 +7,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-
-	logContext "github.com/trufflesecurity/trufflehog/v3/pkg/context"
 )
 
 func TestCache(t *testing.T) {
-	c := New()
+	c := New[string]()
 
 	// Test set and get.
 	c.Set("key1", "key1")
@@ -60,7 +58,8 @@ func TestCache(t *testing.T) {
 	}
 
 	// Test getting only the values.
-	vals := c.Values()
+	vals := make([]string, 0, c.Count())
+	vals = append(vals, c.Values()...)
 	sort.Strings(vals)
 	sort.Strings(values)
 	if !cmp.Equal(values, vals) {
@@ -82,7 +81,8 @@ func TestCache(t *testing.T) {
 }
 
 func TestCache_NewWithData(t *testing.T) {
-	c := NewWithData(logContext.Background(), []string{"key1", "key2", "key3"})
+	data := []CacheEntry[string]{{"key1", "value1"}, {"key2", "value2"}, {"key3", "value3"}}
+	c := NewWithData(data)
 
 	// Test the count.
 	if c.Count() != 3 {
@@ -104,10 +104,10 @@ func TestCache_NewWithData(t *testing.T) {
 	}
 }
 
-func setupBenchmarks(b *testing.B) *Cache {
+func setupBenchmarks(b *testing.B) *Cache[string] {
 	b.Helper()
 
-	c := New()
+	c := New[string]()
 
 	for i := 0; i < 500_000; i++ {
 		key := fmt.Sprintf("key%d", i)
@@ -118,7 +118,7 @@ func setupBenchmarks(b *testing.B) *Cache {
 }
 
 func BenchmarkSet(b *testing.B) {
-	c := New()
+	c := New[string]()
 
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%d", i)

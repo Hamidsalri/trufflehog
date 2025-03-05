@@ -2,21 +2,23 @@ package githubapp
 
 import (
 	"context"
-
-	// b64 "encoding/base64"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
+	regexp "github.com/wasilibs/go-re2"
+
 	"github.com/golang-jwt/jwt"
+
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/detectors"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct {
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
@@ -56,6 +58,9 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			s1 := detectors.Result{
 				DetectorType: detectorspb.DetectorType_GitHubApp,
 				Raw:          []byte(resMatch),
+			}
+			s1.ExtraData = map[string]string{
+				"rotation_guide": "https://howtorotate.com/docs/tutorials/github/",
 			}
 
 			if verify {

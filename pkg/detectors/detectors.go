@@ -2,10 +2,10 @@ package detectors
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
+	"math/big"
 	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"unicode"
 
@@ -30,6 +30,27 @@ type Detector interface {
 // differentiate instances of the same detector type.
 type Versioner interface {
 	Version() int
+}
+
+// MaxSecretSizeProvider is an optional interface that a detector can implement to
+// provide a custom max size for the secret it finds.
+type MaxSecretSizeProvider interface {
+	MaxSecretSize() int64
+}
+
+// StartOffsetProvider is an optional interface that a detector can implement to
+// provide a custom start offset for the secret it finds.
+type StartOffsetProvider interface {
+	StartOffset() int64
+}
+
+// MultiPartCredentialProvider is an optional interface that a detector can implement
+// to indicate its compatibility with multi-part credentials and provide the maximum
+// secret size for the credential it finds.
+type MultiPartCredentialProvider interface {
+	// MaxCredentialSpan returns the maximum span or range of characters that the
+	// detector should consider when searching for a multi-part credential.
+	MaxCredentialSpan() int64
 }
 
 // EndpointCustomizer is an optional interface that a detector can implement to
@@ -60,14 +81,57 @@ type Result struct {
 
 	// This field should only be populated if the verification process itself failed in a way that provides no
 	// information about the verification status of the candidate secret, such as if the verification request timed out.
-	VerificationError error
+	verificationError error
+}
+
+// SetVerificationError is the only way to set a verification error. Any sensitive values should be passed-in as secrets to be redacted.
+func (r *Result) SetVerificationError(err error, secrets ...string) {
+	if err != nil {
+		r.verificationError = redactSecrets(err, secrets...)
+	}
+}
+
+// Public accessors for the fields could also be provided if needed.
+func (r *Result) VerificationError() error {
+	return r.verificationError
+}
+
+// redactSecrets replaces all instances of the given secrets with [REDACTED] in the error message.
+func redactSecrets(err error, secrets ...string) error {
+	lastErr := unwrapToLast(err)
+	errStr := lastErr.Error()
+	for _, secret := range secrets {
+		errStr = strings.Replace(errStr, secret, "[REDACTED]", -1)
+	}
+	return errors.New(errStr)
+}
+
+// unwrapToLast returns the last error in the chain of errors.
+// This is added to exclude non-essential details (like URLs) for brevity and security.
+// Also helps us optimize performance in redaction and enhance log clarity.
+func unwrapToLast(err error) error {
+	for {
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			// We've reached the last error in the chain
+			return err
+		}
+		err = unwrapped
+	}
 }
 
 type ResultWithMetadata struct {
+	// IsWordlistFalsePositive indicates whether this secret was flagged as a false positive based on a wordlist check
+	IsWordlistFalsePositive bool
 	// SourceMetadata contains source-specific contextual information.
 	SourceMetadata *source_metadatapb.MetaData
 	// SourceID is the ID of the source that the API uses to map secrets to specific sources.
-	SourceID int64
+	SourceID sources.SourceID
+	// JobID is the ID of the job that the API uses to map secrets to specific jobs.
+	JobID sources.JobID
+	// SecretID is the ID of the secret, if it exists.
+	// Only secrets that are being reverified will have a SecretID.
+	SecretID int64
 	// SourceType is the type of Source.
 	SourceType sourcespb.SourceType
 	// SourceName is the name of the Source.
@@ -82,6 +146,8 @@ func CopyMetadata(chunk *sources.Chunk, result Result) ResultWithMetadata {
 	return ResultWithMetadata{
 		SourceMetadata: chunk.SourceMetadata,
 		SourceID:       chunk.SourceID,
+		JobID:          chunk.JobID,
+		SecretID:       chunk.SecretID,
 		SourceType:     chunk.SourceType,
 		SourceName:     chunk.SourceName,
 		Result:         result,
@@ -117,12 +183,12 @@ func CleanResults(results []Result) []Result {
 }
 
 // PrefixRegex ensures that at least one of the given keywords is within
-// 20 characters of the capturing group that follows.
+// 40 characters of the capturing group that follows.
 // This can help prevent false positives.
 func PrefixRegex(keywords []string) string {
-	pre := `(?i)(?:`
+	pre := `(?i:`
 	middle := strings.Join(keywords, "|")
-	post := `)(?:.|[\n\r]){0,40}`
+	post := `)(?:.|[\n\r]){0,40}?`
 	return pre + middle + post
 }
 
@@ -140,23 +206,30 @@ func KeyIsRandom(key string) bool {
 }
 
 func MustGetBenchmarkData() map[string][]byte {
-	_, filename, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(filename)
-	small := make([]byte, 0)
-	medium, err := os.ReadFile(filepath.Join(dir, "detectors.go"))
-	if err != nil {
-		panic(err)
+	sizes := map[string]int{
+		"xsmall":  10,          // 10 bytes
+		"small":   100,         // 100 bytes
+		"medium":  1024,        // 1KB
+		"large":   10 * 1024,   // 10KB
+		"xlarge":  100 * 1024,  // 100KB
+		"xxlarge": 1024 * 1024, // 1MB
 	}
-	big := make([]byte, 0)
-	for i := 0; i < 25; i++ {
-		big = append(big, medium...)
+	data := make(map[string][]byte)
+
+	for key, size := range sizes {
+		// Generating a byte slice of a specific size with random data.
+		content := make([]byte, size)
+		for i := 0; i < size; i++ {
+			randomByte, err := rand.Int(rand.Reader, big.NewInt(256))
+			if err != nil {
+				panic(err)
+			}
+			content[i] = byte(randomByte.Int64())
+		}
+		data[key] = content
 	}
 
-	return map[string][]byte{
-		"small":  small,
-		"medium": medium,
-		"big":    big,
-	}
+	return data
 }
 
 func RedactURL(u url.URL) string {

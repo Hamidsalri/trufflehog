@@ -2,24 +2,29 @@ package microsoftteamswebhook
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
+
+	regexp "github.com/wasilibs/go-re2"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/detectors"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct {
+	client *http.Client
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
 
 var (
-	client = common.SaneHttpClientTimeOut(5 * time.Second)
+	defaultClient = common.SaneHttpClientTimeOut(5 * time.Second)
 
 	// Make sure that your group is surrounded in boundary characters such as below to reduce false positives.
 	keyPat = regexp.MustCompile(`(https:\/\/[a-zA-Z-0-9]+\.webhook\.office\.com\/webhookb2\/[a-zA-Z-0-9]{8}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{12}\@[a-zA-Z-0-9]{8}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{12}\/IncomingWebhook\/[a-zA-Z-0-9]{32}\/[a-zA-Z-0-9]{8}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{4}-[a-zA-Z-0-9]{12})`)
@@ -47,33 +52,57 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			DetectorType: detectorspb.DetectorType_MicrosoftTeamsWebhook,
 			Raw:          []byte(resMatch),
 		}
-		if verify {
-			payload := strings.NewReader(`{'text':''}`)
-			req, err := http.NewRequestWithContext(ctx, "POST", resMatch, payload)
-			if err != nil {
-				continue
-			}
-			req.Header.Add("Content-Type", "application/json")
-			res, err := client.Do(req)
-			if err == nil {
-				body, err := io.ReadAll(res.Body)
-				res.Body.Close()
-				if err == nil {
-					if res.StatusCode >= 200 && strings.Contains(string(body), "Text is required") {
-						s1.Verified = true
-					}
-				}
-			}
+		s1.ExtraData = map[string]string{
+			"rotation_guide": "https://howtorotate.com/docs/tutorials/ms/",
 		}
 
-		if !s1.Verified && detectors.IsKnownFalsePositive(resMatch, detectors.DefaultFalsePositives, false) {
-			continue
+		if verify {
+			client := s.client
+			if client == nil {
+				client = defaultClient
+			}
+
+			isVerified, verificationErr := verifyWebhook(ctx, client, resMatch)
+			s1.Verified = isVerified
+			s1.SetVerificationError(verificationErr, resMatch)
 		}
 
 		results = append(results, s1)
 	}
 
 	return results, nil
+}
+
+func verifyWebhook(ctx context.Context, client *http.Client, webhookURL string) (bool, error) {
+	payload := strings.NewReader(`{'text':''}`)
+	req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, payload)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return false, err
+	}
+
+	switch {
+	case res.StatusCode == http.StatusBadRequest:
+		if strings.Contains(string(body), "Text is required") {
+			return true, nil
+		}
+		return false, fmt.Errorf("unexpected response body: %s", string(body))
+	case res.StatusCode < 200 || res.StatusCode >= 500:
+		return false, fmt.Errorf("unexpected HTTP response status: %d", res.StatusCode)
+	default:
+		return false, nil
+	}
 }
 
 func (s Scanner) Type() detectorspb.DetectorType {

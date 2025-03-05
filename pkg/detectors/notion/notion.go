@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
+
+	regexp "github.com/wasilibs/go-re2"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/detectors"
@@ -51,19 +52,21 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			if err != nil {
 				continue
 			}
-			req.Header.Add("Notion-Version", "2021-05-11")
+			req.Header.Add("Notion-Version", "2022-06-28")
 			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", resMatch))
 			res, err := client.Do(req)
 			if err == nil {
 				defer res.Body.Close()
-				if res.StatusCode >= 200 && res.StatusCode < 300 {
+				if res.StatusCode >= 200 && res.StatusCode < 300 || res.StatusCode == 403 {
+					// if >= 200 and < 300, the secret is valid and has privileges for the /v1/users endpoint
+					// If 403, the secret is valid, but does not have privileges for the /v1/users endpoint,
+					// Notion returns 401 for all non-valid keys, thus 403 indicates it has fine-tuned permissions,
+					// /v1/search, /v1/databases/*, etc. may work.
 					s1.Verified = true
-				} else {
-					// This function will check false positives for common test words, but also it will make sure the key appears 'random' enough to be a real key.
-					if detectors.IsKnownFalsePositive(resMatch, detectors.DefaultFalsePositives, true) {
-						continue
-					}
+
 				}
+			} else {
+				s1.SetVerificationError(err, resMatch)
 			}
 		}
 

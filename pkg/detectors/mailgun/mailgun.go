@@ -3,8 +3,8 @@ package mailgun
 import (
 	"context"
 	"fmt"
+	regexp "github.com/wasilibs/go-re2"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
@@ -12,7 +12,9 @@ import (
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct{
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
@@ -55,7 +57,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 				if err != nil {
 					continue
 				}
-				
+
 				// If resMatch has "key" prefix, use it as the username for basic auth.
 				if strings.HasPrefix(resMatch, "key-") {
 					req.SetBasicAuth("api", resMatch)
@@ -68,10 +70,6 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					defer res.Body.Close()
 					if res.StatusCode >= 200 && res.StatusCode < 300 {
 						s1.Verified = true
-					} else {
-						if detectors.IsKnownFalsePositive(resMatch, detectors.DefaultFalsePositives, true) {
-							continue
-						}
 					}
 				}
 

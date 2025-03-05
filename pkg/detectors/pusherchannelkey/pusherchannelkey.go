@@ -6,9 +6,9 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	regexp "github.com/wasilibs/go-re2"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +18,9 @@ import (
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct{
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
@@ -84,14 +86,14 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					payload := strings.NewReader(stringPayload)
 					_bodyMD5 := md5.New()
 					_bodyMD5.Write([]byte(stringPayload))
-					md5 := hex.EncodeToString(_bodyMD5.Sum(nil))
+					hash := hex.EncodeToString(_bodyMD5.Sum(nil))
 
 					timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 					params := url.Values{
 						"auth_key":       {reskeyMatch},
 						"auth_timestamp": {timestamp},
 						"auth_version":   {auth_version},
-						"body_md5":       {md5},
+						"body_md5":       {hash},
 					}
 
 					usecd, _ := url.QueryUnescape(params.Encode())
@@ -99,7 +101,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					stringToSign := strings.Join([]string{method, path, usecd}, "\n")
 					signature := hex.EncodeToString(hmacBytes([]byte(stringToSign), []byte(ressecretMatch)))
 
-					md5Str := "https://api-ap1.pusher.com/apps/" + resappMatch + "/events?auth_key=" + reskeyMatch + "&auth_signature=" + signature + "&auth_timestamp=" + timestamp + "&auth_version=1.0&body_md5=" + md5
+					md5Str := "https://api-ap1.pusher.com/apps/" + resappMatch + "/events?auth_key=" + reskeyMatch + "&auth_signature=" + signature + "&auth_timestamp=" + timestamp + "&auth_version=1.0&body_md5=" + hash
 
 					req, err := http.NewRequestWithContext(ctx, method, md5Str, payload)
 					if err != nil {
@@ -111,11 +113,6 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 						defer res.Body.Close()
 						if res.StatusCode >= 200 && res.StatusCode < 300 {
 							s1.Verified = true
-						} else {
-							// This function will check false positives for common test words, but also it will make sure the key appears 'random' enough to be a real key.
-							if detectors.IsKnownFalsePositive(ressecretMatch, detectors.DefaultFalsePositives, true) {
-								continue
-							}
 						}
 					}
 				}

@@ -100,19 +100,52 @@ func NewCustomTransport(T http.RoundTripper) *CustomTransport {
 	return &CustomTransport{T}
 }
 
-func ConstantStatusHttpClient(statusCode int) *http.Client {
+func ConstantResponseHttpClient(statusCode int, body string) *http.Client {
 	return &http.Client{
 		Timeout: DefaultResponseTimeout,
 		Transport: FakeTransport{
 			CreateResponse: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
 					Request:    req,
-					Body:       io.NopCloser(strings.NewReader("")),
+					Body:       io.NopCloser(strings.NewReader(body)),
 					StatusCode: statusCode,
 				}, nil
 			},
 		},
 	}
+}
+
+// ClientOption configures how we set up the client.
+type ClientOption func(*retryablehttp.Client)
+
+// WithCheckRetry allows setting a custom CheckRetry policy.
+func WithCheckRetry(cr retryablehttp.CheckRetry) ClientOption {
+	return func(c *retryablehttp.Client) { c.CheckRetry = cr }
+}
+
+// WithBackoff allows setting a custom backoff policy.
+func WithBackoff(b retryablehttp.Backoff) ClientOption {
+	return func(c *retryablehttp.Client) { c.Backoff = b }
+}
+
+// WithTimeout allows setting a custom timeout.
+func WithTimeout(timeout time.Duration) ClientOption {
+	return func(c *retryablehttp.Client) { c.HTTPClient.Timeout = timeout }
+}
+
+// WithMaxRetries allows setting a custom maximum number of retries.
+func WithMaxRetries(retries int) ClientOption {
+	return func(c *retryablehttp.Client) { c.RetryMax = retries }
+}
+
+// WithRetryWaitMin allows setting a custom minimum retry wait.
+func WithRetryWaitMin(wait time.Duration) ClientOption {
+	return func(c *retryablehttp.Client) { c.RetryWaitMin = wait }
+}
+
+// WithRetryWaitMax allows setting a custom maximum retry wait.
+func WithRetryWaitMax(wait time.Duration) ClientOption {
+	return func(c *retryablehttp.Client) { c.RetryWaitMax = wait }
 }
 
 func PinnedRetryableHttpClient() *http.Client {
@@ -136,21 +169,28 @@ func PinnedRetryableHttpClient() *http.Client {
 	return httpClient.StandardClient()
 }
 
-func RetryableHttpClient() *http.Client {
+func RetryableHTTPClient(opts ...ClientOption) *http.Client {
 	httpClient := retryablehttp.NewClient()
 	httpClient.RetryMax = 3
 	httpClient.Logger = nil
-	httpClient.HTTPClient.Timeout = 3 * time.Second
 	httpClient.HTTPClient.Transport = NewCustomTransport(nil)
+
+	for _, opt := range opts {
+		opt(httpClient)
+	}
 	return httpClient.StandardClient()
 }
 
-func RetryableHttpClientTimeout(timeOutSeconds int64) *http.Client {
+func RetryableHTTPClientTimeout(timeOutSeconds int64, opts ...ClientOption) *http.Client {
 	httpClient := retryablehttp.NewClient()
 	httpClient.RetryMax = 3
 	httpClient.Logger = nil
 	httpClient.HTTPClient.Timeout = time.Duration(timeOutSeconds) * time.Second
 	httpClient.HTTPClient.Transport = NewCustomTransport(nil)
+
+	for _, opt := range opts {
+		opt(httpClient)
+	}
 	return httpClient.StandardClient()
 }
 

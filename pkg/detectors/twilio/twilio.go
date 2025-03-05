@@ -2,25 +2,41 @@ package twilio
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
-	"regexp"
+
+	regexp "github.com/wasilibs/go-re2"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/detectors"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct {
+	detectors.DefaultMultiPartCredentialProvider
+	client *http.Client
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
 
 var (
+	defaultClient = common.SaneHttpClient()
 	identifierPat = regexp.MustCompile(`(?i)sid.{0,20}AC[0-9a-f]{32}`) // Should we have this? Seems restrictive.
 	sidPat        = regexp.MustCompile(`\bAC[0-9a-f]{32}\b`)
 	keyPat        = regexp.MustCompile(`\b[0-9a-f]{32}\b`)
-	client        = common.SaneHttpClient()
 )
+
+type serviceResponse struct {
+	Services []service `json:"services"`
+}
+
+type service struct {
+	FriendlyName string `json:"friendly_name"` // friendly name of a service
+	SID          string `json:"sid"`           // object id of service
+	AccountSID   string `json:"account_sid"`   // account sid
+}
 
 // Keywords are used for efficiently pre-filtering chunks.
 // Use identifiers in the secret preferably, or the provider name.
@@ -50,7 +66,16 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 				Redacted:     sid,
 			}
 
+			s1.ExtraData = map[string]string{
+				"rotation_guide": "https://howtorotate.com/docs/tutorials/twilio/",
+			}
+
 			if verify {
+				client := s.client
+				if client == nil {
+					client = defaultClient
+				}
+
 				req, err := http.NewRequestWithContext(
 					ctx, "GET", "https://verify.twilio.com/v2/Services", nil)
 				if err != nil {
@@ -61,16 +86,25 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 				req.SetBasicAuth(sid, key)
 				res, err := client.Do(req)
 				if err == nil {
-					res.Body.Close() // The request body is unused.
+					defer res.Body.Close()
 
 					if res.StatusCode >= 200 && res.StatusCode < 300 {
 						s1.Verified = true
+						var serviceResponse serviceResponse
+						if err := json.NewDecoder(res.Body).Decode(&serviceResponse); err == nil && len(serviceResponse.Services) > 0 { // no error in parsing and have at least one service
+							service := serviceResponse.Services[0]
+							s1.ExtraData["friendly_name"] = service.FriendlyName
+							s1.ExtraData["account_sid"] = service.AccountSID
+						}
+					} else if res.StatusCode == 401 || res.StatusCode == 403 {
+						// The secret is determinately not verified (nothing to do)
+					} else {
+						err = fmt.Errorf("unexpected HTTP response status %d", res.StatusCode)
+						s1.SetVerificationError(err, key)
 					}
+				} else {
+					s1.SetVerificationError(err, key)
 				}
-			}
-
-			if !s1.Verified && detectors.IsKnownFalsePositive(string(s1.Raw), detectors.DefaultFalsePositives, true) {
-				continue
 			}
 
 			if len(keyMatches) > 0 {

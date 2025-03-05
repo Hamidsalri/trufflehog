@@ -14,6 +14,7 @@ import (
 )
 
 type Scanner struct {
+	detectors.DefaultMultiPartCredentialProvider
 	ignorePatterns []regexp.Regexp
 }
 
@@ -30,7 +31,7 @@ func New(opts ...func(*Scanner)) *Scanner {
 
 func WithIgnorePattern(ignoreStrings []string) func(*Scanner) {
 	return func(s *Scanner) {
-		ignorePatterns := []regexp.Regexp{}
+		var ignorePatterns []regexp.Regexp
 		for _, ignoreString := range ignoreStrings {
 			ignorePattern, err := regexp.Compile(ignoreString)
 			if err != nil {
@@ -45,6 +46,7 @@ func WithIgnorePattern(ignoreStrings []string) func(*Scanner) {
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
+var _ detectors.CustomFalsePositiveChecker = (*Scanner)(nil)
 
 var (
 	keyPat = regexp.MustCompile(`(?i)jdbc:[\w]{3,10}:[^\s"']{0,512}`)
@@ -92,19 +94,20 @@ matchLoop:
 			// behavior before tri-state verification was introduced and preserving it allows us to gradually migrate
 			// detectors to use tri-state verification.
 			if pingRes.err != nil && !pingRes.determinate {
-				s.VerificationError = pingRes.err
+				err = pingRes.err
+				s.SetVerificationError(err, jdbcConn)
 			}
 			// TODO: specialized redaction
-		}
-
-		if !s.Verified && detectors.IsKnownFalsePositive(string(s.Raw), detectors.DefaultFalsePositives, false) {
-			continue
 		}
 
 		results = append(results, s)
 	}
 
 	return
+}
+
+func (s Scanner) IsFalsePositive(_ detectors.Result) (bool, string) {
+	return false, ""
 }
 
 func tryRedactAnonymousJDBC(conn string) string {
@@ -199,7 +202,6 @@ func tryRedactRegex(conn string) (string, bool) {
 }
 
 var supportedSubprotocols = map[string]func(string) (jdbc, error){
-	"sqlite":     parseSqlite,
 	"mysql":      parseMySQL,
 	"postgresql": parsePostgres,
 	"sqlserver":  parseSqlServer,

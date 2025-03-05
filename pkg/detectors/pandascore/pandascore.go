@@ -3,8 +3,8 @@ package pandascore
 import (
 	"context"
 	"fmt"
+	regexp "github.com/wasilibs/go-re2"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
@@ -48,7 +48,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 		}
 
 		if verify {
-			req, err := http.NewRequest("GET", "https://api.pandascore.co/videogames", nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", "https://api.pandascore.co/videogames", nil)
 			if err != nil {
 				continue
 			}

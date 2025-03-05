@@ -3,8 +3,8 @@ package databrickstoken
 import (
 	"context"
 	"fmt"
+	regexp "github.com/wasilibs/go-re2"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
@@ -12,17 +12,20 @@ import (
 	"github.com/trufflesecurity/trufflehog/v3/pkg/pb/detectorspb"
 )
 
-type Scanner struct{}
+type Scanner struct {
+	client *http.Client
+	detectors.DefaultMultiPartCredentialProvider
+}
 
 // Ensure the Scanner satisfies the interface at compile time.
 var _ detectors.Detector = (*Scanner)(nil)
 
 var (
-	client = common.SaneHttpClient()
+	defaultClient = common.SaneHttpClient()
 
 	// Make sure that your group is surrounded in boundary characters such as below to reduce false positives.
-	domain = regexp.MustCompile(`\b(https:\/\/[a-z0-9-]+\.cloud\.databricks\.com)\b`)
-	keyPat = regexp.MustCompile(`\b(dapi[a-z0-9]{32})\b`)
+	domain = regexp.MustCompile(`\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(cloud\.databricks\.com|gcp\.databricks\.com|azurewebsites\.net))\b`)
+	keyPat = regexp.MustCompile(`\b(dapi[0-9a-f]{32})(-\d)?\b`)
 )
 
 // Keywords are used for efficiently pre-filtering chunks.
@@ -39,15 +42,9 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 	domainMatches := domain.FindAllStringSubmatch(dataStr, -1)
 
 	for _, match := range matches {
-		if len(match) != 2 {
-			continue
-		}
 		resMatch := strings.TrimSpace(match[1])
 
 		for _, domainmatch := range domainMatches {
-			if len(domainmatch) != 2 {
-				continue
-			}
 			resDomainMatch := strings.TrimSpace(domainmatch[1])
 
 			s1 := detectors.Result{
@@ -57,7 +54,11 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			}
 
 			if verify {
-				req, err := http.NewRequestWithContext(ctx, "GET", resDomainMatch + "/api/2.0/clusters/list", nil)
+				client := s.client
+				if client == nil {
+					client = defaultClient
+				}
+				req, err := http.NewRequestWithContext(ctx, "GET", "https://"+resDomainMatch+"/api/2.0/clusters/list", nil)
 				if err != nil {
 					continue
 				}
@@ -67,12 +68,14 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					defer res.Body.Close()
 					if res.StatusCode >= 200 && res.StatusCode < 300 {
 						s1.Verified = true
+					} else if res.StatusCode == 403 {
+						// nothing to do here
 					} else {
-						// This function will check false positives for common test words, but also it will make sure the key appears 'random' enough to be a real key.
-						if detectors.IsKnownFalsePositive(resMatch, detectors.DefaultFalsePositives, true) {
-							continue
-						}
+						err = fmt.Errorf("unexpected HTTP response status %d", res.StatusCode)
+						s1.SetVerificationError(err, resMatch)
 					}
+				} else {
+					s1.SetVerificationError(err, resMatch)
 				}
 			}
 
